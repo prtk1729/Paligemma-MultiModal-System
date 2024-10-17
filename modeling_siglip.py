@@ -54,6 +54,8 @@ class SiglipAttention(nn.Module):
 
         self.scale = 1 / (self.head_dim ** 0.5)
 
+        self.dropout = config.attention_dropout
+
         self.key_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.value_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.query_proj = nn.Linear(self.embed_dim, self.embed_dim)
@@ -173,13 +175,12 @@ class SiglipMLP(nn.Module):
         self.embed_dim = config.hidden_size
         self.fc1 = nn.Linear(self.embed_dim, self.intermediate_size)
         self.fc2 = nn.Linear(self.intermediate_size, self.embed_dim)
-        self.gelu = nn.functional.gelu( approximate = "tanh" )
 
 
     def forward(self, x):
         # (B, num_patches, embed_dim) 
         x = self.fc1(x)
-        x = self.gelu(x)
+        x = nn.functional.gelu( x, approximate = "tanh" )
         x = self.fc2(x)
         return x
 
@@ -248,7 +249,7 @@ class SiglipVisionEmbeddings(nn.Module):
         self.patch_size = config.patch_size
         self.image_size = config.image_size
         self.num_patches = ( self.image_size // self.patch_size ) ** 2
-        self.num_channel = config.num_channels # 3 RGB
+        self.num_channels = config.num_channels # 3 RGB
         self.embed_dim = config.hidden_size
 
         # Partition each image into num_patches s.t
@@ -328,7 +329,32 @@ class SiglipVisionModel(nn.Module):
 
     def forward(self, x):
         # x is of type numpy
-        # (Batch, H, W, C)
+        # (Batch, C, H, W)
         return self.model(x)
 
 
+if __name__ == '__main__':
+    batch_size = 2
+    num_channels = 3
+    height, width = 224, 224
+
+    x = torch.rand(batch_size, num_channels, height, width)
+    config = SiglipVisionConfig( num_channels=3, \
+                                image_size=224,
+                                patch_size=16,
+                                hidden_size=768,
+                                intermediate_size=3072,
+                                num_hidden_layers=12,
+                                num_attention_heads=12,
+                                attention_dropout=0.0,
+                                layer_norm_eps=1e-6,
+                                num_image_tokens=None
+                                         )
+
+    # print( config.num_channels )
+
+    model = SiglipVisionModel(config)
+    out = model.forward(x)
+    print( out.shape )  # torch.Size([2, 196, 768])
+    # num_patches = (224//16)**2 = 14**2 = 196
+    # verified!
