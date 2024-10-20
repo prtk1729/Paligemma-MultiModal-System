@@ -3,8 +3,8 @@ Paligemma Multi-Modal System: A Comprehensive implementation from Scratch, Emula
 
 
 ### The overall Multi-Modal Architecture [Abstraction]
-![Alt text](./design_diagrams/Multi_Modal_System.drawio.png)
+![Alt text](./design_diagrams/design_images/Multi_Modal_System.drawio.png)
 
 
 ### Block-Subblock Dependency View [Concrete]
-![Alt text](./design_diagrams/Multi_Modal_System_modified.drawio.png)
+![Alt text](./design_diagrams/design_images/Multi_Modal_System_modified.drawio.png)
