@@ -1,10 +1,10 @@
 # Paligemma-MultiModal-System
-Building a Multi-modal System from Scratch using the best coding practices
+Paligemma Multi-Modal System: A Comprehensive implementation from Scratch, Emulating Multi-Modal Architectures for Future Inference and Deployment
 
 
 ### The overall Multi-Modal Architecture [Abstraction]
-[View the PDF](Paligemma-MultiModal-System/design_diagrams/Multi_Modal_System.drawio.pdf)
+![Alt text](Paligemma-MultiModal-System/design_diagrams/Multi_Modal_System_modified.drawio.png)
 
 
 ### Block-Subblock Dependency View [Concrete]
-[View the PDF](Paligemma-MultiModal-System/design_diagrams/Block_SubBlock_Dependencies.drawio.pdf)
+![Alt text](/home/prateek/ThinkAuto/Umar/MultiModalSys/Paligemma-MultiModal-System/design_diagrams/Multi_Modal_System_modified.drawio.png)
