@@ -101,6 +101,7 @@ class KVCache():
 
 class PaliGemmaMultiModalProjector(nn.Module):
     def __init__(self, config: PaliGemmaConfig):
+        super().__init__()
         self.projection_dim = config.projection_dim
         self.image_emb = config.vision_config.hidden_size
         self.linear = nn.Linear(self.image_emb, self.projection_dim, bias = False)
