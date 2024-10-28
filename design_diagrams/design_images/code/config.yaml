@@ -1,0 +1,8 @@
+project_dir: "../../data/to_process/"
+results_dir: "../../data/processed/"
+models_path: "../trained_models/PointNet2.pth"
+mapping_path: "../trained_models/PointNet2_mapping.pkl"
+val_dir: "../../data/to_process/"
+train_dir: "../../data/train/"
+num_point: 4096
+epochs: 300

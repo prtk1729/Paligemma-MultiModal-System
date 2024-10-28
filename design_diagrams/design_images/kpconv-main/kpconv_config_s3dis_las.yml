@@ -1,0 +1,100 @@
+dataset_path_train: ../../data/s3dis_las_train_test_val/train
+dataset_path_validation: ../../data/s3dis_las_train_test_val/val
+dataset_path_test: ../../data/s3dis_las_train_test_val/test
+
+path_output: ../../data/s3dis_las_results_kpconv
+saving_path: ../../data/s3dis_las_saved_kpconv
+
+ignored_labels: [] 
+label_to_names: 
+  0: 'ceiling'
+  1: 'floor'
+  2: 'wall'
+  3: 'beam'
+  4: 'column'
+  5: 'window'
+  6: 'door'
+  7: 'chair'
+  8: 'table'
+  9: 'bookcase'
+  10: 'sofa'
+  11: 'board'
+  12: 'clutter'
+
+num_votes: 100
+dataset: Standard 
+label_continue: false 
+num_classes: null 
+dataset_task: '' 
+
+input_threads: 10
+
+architecture:
+  - simple
+  - resnetb
+  - resnetb_strided
+  - resnetb
+  - resnetb
+  - resnetb_strided
+  - resnetb
+  - resnetb
+  - resnetb_strided
+  - resnetb_deformable
+  - resnetb_deformable
+  - resnetb_deformable_strided
+  - resnetb_deformable
+  - resnetb_deformable
+  - nearest_upsample
+  - unary
+  - nearest_upsample
+  - unary
+  - nearest_upsample
+  - unary
+  - nearest_upsample
+  - unary
+  
+
+num_kernel_points: 15 
+in_radius: 1.2  
+first_subsampling_dl: 0.03
+conv_radius: 2.5 
+deform_radius: 5.0 
+KP_extent: 1.2 
+KP_influence: linear 
+aggregation_mode: sum 
+first_features_dim: 128 
+in_features_dim: 5
+modulated: false 
+use_batch_norm: true 
+batch_norm_momentum: 0.02 
+deform_fitting_mode: point2point 
+deform_fitting_power: 1.0 
+deform_lr_factor: 0.1 
+repulse_extent: 1.2 
+
+
+max_epoch: 100 
+epoch_steps: 50
+validation_size: 20
+checkpoint_gap: 20
+
+learning_rate: 0.01
+momentum: 0.98
+lr_decays:
+  1: 0.9810838814600102
+  2: 0.9810838814600102
+grad_clip_norm: 100.0 
+batch_num: 6 
+augment_scale_anisotropic: true 
+augment_symmetries: 
+  - true
+  - false
+  - false
+augment_rotation: vertical 
+augment_scale_min: 0.9 
+augment_scale_max: 1.1 
+augment_noise: 0.001 
+augment_color: 0.8 
+segloss_balance: none 
+saving: true 
+

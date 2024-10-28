@@ -12,7 +12,7 @@ class SiglipVisionConfig:
                  image_size: int = 224,
                  patch_size: int = 16,
                  num_channels: int = 3,
-                 hidden_size: int = 768, # embed_dim of image/text-tokens
+                 hidden_size: int = 768, # embed_dim of image, not text_tokens(we use Linear Projection for this)
                  intermediate_size: int = 3072, # hidden dim of FFN that it projects to.
                  num_hidden_layers: int = 12, # Nx of Encoder Block
                  num_attention_heads: int = 12, # Num of heads of MH-A

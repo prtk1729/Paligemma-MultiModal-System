@@ -187,6 +187,8 @@ class PaligemmaProcessor(): # no inheritance
                                            bos_token = self.tokenizer.bos_token)
 
         # str -> tokens i.e encode method
+        # Returns, input_ids(i.e tokenised values for seq)
+        # and attention_mask
         gemma_string_tokenized = self.tokenizer( gemma_string,
                                                  return_tensors = "pt",
                                                  truncation = truncation, 
