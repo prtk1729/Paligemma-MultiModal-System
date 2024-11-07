@@ -46,8 +46,6 @@ class PaliGemmaConfig():
 
 
 class KVCache():
-    
-
     def __init__(self):
         '''
             The max size of k_cache can go till "N"
@@ -97,6 +95,13 @@ class KVCache():
             self.v_cache[layer_idx] = torch.cat([ self.v_cache[layer_idx], value_states ], dim = -2)
 
         return self.k_cache[layer_idx], self.v_cache[layer_idx]
+
+    def num_items(self) -> int:
+        if len(self.key_cache) == 0:
+            return 0
+        else:
+            # The shape of the key_cache is [Batch_Size, Num_Heads_KV, Seq_Len, Head_Dim]
+            return self.key_cache[0].shape[-2]
 
 
 class PaliGemmaMultiModalProjector(nn.Module):

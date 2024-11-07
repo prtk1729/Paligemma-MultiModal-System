@@ -91,7 +91,8 @@ class SiglipAttention(nn.Module):
         # How strongly are ith-query and jth-keys related.
         # Higher the score, they are linked more closely
         # In ow, we are contextualising the embeddings
-        # (B, num_heads, num_patches, head_dim) -> (B, num_heads, num_patches, num_patches)
+        # (B, num_heads, num_patches, head_dim) x (B, num_heads, head_dim, num_patches) 
+        #   => (B, num_heads, num_patches, num_patches)
         attn_weights = torch.matmul(queries, keys.transpose(2, 3) ) 
 
         # scaling down by sqrt(head_dim)
