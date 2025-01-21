@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from modeling_siglip import SiglipVisionConfig, SiglipVisionModel
 
-from modeling_gemma import GemmaForCausalLM, GemmaConfig
+from modeling_gemma import GemmaForCausalLM, GemmaConfig, KVCache
 
 # config as per the huggingface implementation of Paligemma
 # https://huggingface.co/google/paligemma-3b-pt-224/tree/main -> `config.json` file
@@ -22,6 +22,7 @@ class PaliGemmaConfig():
                 pad_token_id = None,
                 vocab_size = 257152,
                 hidden_size = 2048, # This is text's embed_dim, see projection_dim is what we want the image tokens to project to
+                **kwargs
                 ):
                 super().__init__()
                 self.vision_config = vision_config
@@ -35,9 +36,10 @@ class PaliGemmaConfig():
 
                 # set other things
                 self.vision_config = SiglipVisionConfig(**vision_config) # sets the values
-                self.text_config = GemmaConfig(**text_config) # sets the values
+                self.text_config = GemmaConfig(**text_config, pad_token_id = self.pad_token_id) # sets the values
 
                 self.vocab_size = self.text_config.vocab_size
+
 
                 self.text_config.num_image_tokens = (self.vision_config.image_size // self.vision_config.patch_size) ** 2
                 self.vision_config.projection_dim = projection_dim
@@ -45,63 +47,6 @@ class PaliGemmaConfig():
 
 
 
-class KVCache():
-    def __init__(self):
-        '''
-            The max size of k_cache can go till "N"
-            Where "N", is number of decoder layers i.e "Nx" in diagram
-        '''
-        self.k_cache: List[torch.Tensor] = []
-        self.v_cache: List[torch.Tensor] = []
-
-
-    def update(self, \
-               key_states: torch.Tensor, 
-               value_states: torch.Tensor, 
-               layer_idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-            - We get the computed key_states after interacting with
-            - Wk, Wv for each head
-            - We store it in respective caches.
-            - NOTE: 
-                For each layer_idx in DecoderLayer, we store the
-                key and value after computation
-            - Recall:
-                Key and Value Viz
-        """
-        # Need to know if the layer_idx, is being computed for first time
-        if layer_idx >= len(self.k_cache):
-            # say, there are 32 DecoderLayers in the Decoder Block
-            # But, currently I have processed in the 10 layers
-            # i.e key_states and value_states for [1, 2, 3, ..., 10] are in cache
-            # 11th layer 1st token comes i.e start_pos = 0 (recall: LLaMa)
-            # we need to create a new list_item to populate the 11th layer
-            self.k_cache.append(key_states)
-            self.v_cache.append(value_states)        
-
-            # Recall viz:
-            #   row_view: [ [...], [..new_key_state..] ], new row added
-            #   in col view: [ [...], [..new_value_state..] ], new col added           
-        else:
-            # (Batch, num_kv_heads, seq_len, embed_dim)
-            # For each head, the self-attention happens parallely
-            # new token's key and value states.
-            # Since, new token, get's appended where, i.e at which dim?
-            # 2nd last dim => dim = -2
-            # say, 11th layer was already present and layer_idx is 11
-            # Means this is some token with pos >= 2, for 11th layer
-            # Where to place this?
-            self.k_cache[layer_idx] = torch.cat([ self.k_cache[layer_idx], key_states ], dim = -2)
-            self.v_cache[layer_idx] = torch.cat([ self.v_cache[layer_idx], value_states ], dim = -2)
-
-        return self.k_cache[layer_idx], self.v_cache[layer_idx]
-
-    def num_items(self) -> int:
-        if len(self.key_cache) == 0:
-            return 0
-        else:
-            # The shape of the key_cache is [Batch_Size, Num_Heads_KV, Seq_Len, Head_Dim]
-            return self.key_cache[0].shape[-2]
 
 
 class PaliGemmaMultiModalProjector(nn.Module):
@@ -129,10 +74,10 @@ class PaliGemmaForConditionalGeneration(nn.Module):
         super().__init__()
         self.config = config
         self.vision_config = self.config.vision_config # Recall we upated this in PGConfig and ret the updated config obj
-        self.vision_tower = SiglipVisionModel(**self.vision_config)
+        self.vision_tower = SiglipVisionModel(self.vision_config)
 
         self.text_config = self.config.text_config
-        self.language_model = GemmaForCausalLM(**self.text_config)
+        self.language_model = GemmaForCausalLM(self.text_config)
         #set the vocab_size
 
         # set the pad_token_id 
@@ -197,25 +142,22 @@ class PaliGemmaForConditionalGeneration(nn.Module):
         # unpack necessary things when required
         q_len = input_embeds.shape[1] # (B, seq_len, embed_dim)
         batch_size = input_embeds.shape[0] # (B, seq_len, embed_dim)
-        device, dtype = input_embeds.dtype, input_embeds.device
+        device, dtype = input_embeds.device, input_embeds.dtype
 
         causal_mask, position_ids = None, None
-        if kv_cache is None or kv_cache.num_items() == 0:
+
+        if (kv_cache is None) or (kv_cache.num_items() == 0):
+            print(f"Prefilling Phase")
             # prefilling stage
             # imagine a mask matrix just for one sequence i.e batch_idx = 0
             # square -> [ gemma_string_tokens_len, gemma_string_tokens_len ]
             causal_mask = torch.full( size = (batch_size, q_len, q_len), 
                                      dtype = dtype, device = device,
                                     fill_value=0  )
-            
-            # What's the idx/ start_pos(recall in LLaMa), for this incoming query_token
-            # This info can be derived from attention_mask
-            # attention_mask: (Batch_size, seq_len) -> Need to know num 1s in seq_len dim in each batch_idx
-            positional_ids = attention_mask.cumsum(dim=-1).masked_fill_( mask = (attention_mask == 0),
-                                                                        value = 1 ).to(device)
-        
+
         else:
             # generation phase
+            print(f"Generation Phase")
             assert q_len == 1, "Generation Phase more than one token CAN'T be input"
             # Single token interacts with [all previous + current token's key and values]
             # Recall important viz
@@ -226,8 +168,7 @@ class PaliGemmaForConditionalGeneration(nn.Module):
                                       fill_value=0,
                                     ) # recall attention_mask for future pad is 0.
             position_pre_sum = attention_mask.cumsum(dim=-1)
-            # last item of the prefix sum tells position of incoming q_token
-            position_ids = position_pre_sum[:, -1] 
+
 
         # shape expected for causal mask has to contain kv_heads
         # NEED TO REGISTER SCENARIOS WHERE .EXPAND TRICK AND WHERE UNSQUEEZE
@@ -235,8 +176,25 @@ class PaliGemmaForConditionalGeneration(nn.Module):
         # causal_mask is used at the Self-Attention after splitting into heads
         causal_mask = causal_mask.unsqueeze( 1 ) 
 
-        if position_ids.dim() == 1:
+                    
+            # # What's the idx/ start_pos(recall in LLaMa), for this incoming query_token
+            # # This info can be derived from attention_mask
+            # # attention_mask: (Batch_size, seq_len) -> Need to know num 1s in seq_len dim in each batch_idx
+            # positional_ids = attention_mask.cumsum(dim=-1).masked_fill_( mask = (attention_mask == 0),
+                                       # last item of the prefix sum tells position of incoming q_token
+            # position_ids = position_pre_sum[:, -1]                                              value = 1 ).to(device)
+
+        if kv_cache is not None and kv_cache.num_items() > 0:
+            # The position of the query is just the last position
+            position_ids = attention_mask.cumsum(-1)[:, -1]
+            if position_ids.dim() == 1:
                 position_ids = position_ids.unsqueeze(0)
+        else:
+            # Create a position_ids based on the size of the attention_mask
+            # For masked tokens, use the number 1 as position.
+            position_ids = (attention_mask.cumsum(-1)).masked_fill_((attention_mask == 0), 1).to(device) 
+
+        print( position_ids, type(position_ids) )
         return causal_mask, position_ids
 
  
@@ -287,11 +245,14 @@ class PaliGemmaForConditionalGeneration(nn.Module):
 
         # attention_mask, causal_mask
         # decision to send input_embeds: Has batch_size, Has q_len, Has dtype and Has device
-        causal_mask, position_ids = self.get_causal_mask_and_position_ids(kv_cache, 
+        causal_mask, position_ids = self._get_causal_mask_and_position_ids(kv_cache, 
                                                                           attention_mask,
                                                                           input_embeds)
         return final_embedding, causal_mask, position_ids
 
+
+    def tie_weights(self):
+        return self.language_model.tie_weights()
 
     def forward(self, \
                 input_ids: torch.LongTensor = None,
@@ -328,7 +289,7 @@ class PaliGemmaForConditionalGeneration(nn.Module):
 
         # Now we can combine/merge by placing them at the placeholder in the 
         # tokenised gemma_string
-        gemma_string_embed, attention_mask, position_ids = self._merge_image_and_text_tokens( \
+        gemma_string_embed, attention_mask, position_ids = self._merge_input_ids_with_image_features( \
                                                                 input_ids,
                                                                 input_embeds,
                                                                 attention_mask,

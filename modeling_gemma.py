@@ -1,8 +1,68 @@
 import torch
 import torch.nn as nn
 
-from modeling_paligemma import KVCache
 from typing import Optional, Tuple
+import math
+
+
+class KVCache():
+    def __init__(self):
+        '''
+            The max size of k_cache can go till "N"
+            Where "N", is number of decoder layers i.e "Nx" in diagram
+        '''
+        self.k_cache: List[torch.Tensor] = []
+        self.v_cache: List[torch.Tensor] = []
+
+
+    def update(self, \
+               key_states: torch.Tensor, 
+               value_states: torch.Tensor, 
+               layer_idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+            - We get the computed key_states after interacting with
+            - Wk, Wv for each head
+            - We store it in respective caches.
+            - NOTE: 
+                For each layer_idx in DecoderLayer, we store the
+                key and value after computation
+            - Recall:
+                Key and Value Viz
+        """
+        # Need to know if the layer_idx, is being computed for first time
+        if layer_idx >= len(self.k_cache):
+            # say, there are 32 DecoderLayers in the Decoder Block
+            # But, currently I have processed in the 10 layers
+            # i.e key_states and value_states for [1, 2, 3, ..., 10] are in cache
+            # 11th layer 1st token comes i.e start_pos = 0 (recall: LLaMa)
+            # we need to create a new list_item to populate the 11th layer
+            self.k_cache.append(key_states)
+            self.v_cache.append(value_states)        
+
+            # Recall viz:
+            #   row_view: [ [...], [..new_key_state..] ], new row added
+            #   in col view: [ [...], [..new_value_state..] ], new col added           
+        else:
+            # (Batch, num_kv_heads, seq_len, embed_dim)
+            # For each head, the self-attention happens parallely
+            # new token's key and value states.
+            # Since, new token, get's appended where, i.e at which dim?
+            # 2nd last dim => dim = -2
+            # say, 11th layer was already present and layer_idx is 11
+            # Means this is some token with pos >= 2, for 11th layer
+            # Where to place this?
+            self.k_cache[layer_idx] = torch.cat([ self.k_cache[layer_idx], key_states ], dim = -2)
+            self.v_cache[layer_idx] = torch.cat([ self.v_cache[layer_idx], value_states ], dim = -2)
+
+        return self.k_cache[layer_idx], self.v_cache[layer_idx]
+
+    def num_items(self) -> int:
+        if len(self.k_cache) == 0:
+            return 0
+        else:
+            # The shape of the k_cache is [Batch_Size, Num_Heads_KV, Seq_Len, Head_Dim]
+            return self.k_cache[0].shape[-2]
+
 
 
 class GemmaConfig():
@@ -20,6 +80,7 @@ class GemmaConfig():
                 attention_bias: bool = False, # all the wk, wv, wq, wo matrices bias
                 attention_dropout: float = 0.0, # Inference: no dropout, only needed during training for reg
                 pad_token_id: int = None,
+                vocab_size: int = None,
                 **kwargs
                 ):
                 super().__init__()
@@ -35,6 +96,7 @@ class GemmaConfig():
                 self.attention_bias = attention_bias
                 self.attention_dropout = attention_dropout
                 self.pad_token_id = pad_token_id
+                self.vocab_size = vocab_size
 
 
 
@@ -94,10 +156,11 @@ def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
 
 class GemmaRMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
         self.dim = dim
         self.eps = eps
         # self.gamma = nn.Parameter( torch.zeros(self.dim) ) # recall this takes a tensor -> soln: dummy init tensor like zeros
-        self.weight = nn.Parameter( torch.zeros(self.dim) ) # recall this takes a tensor -> soln: dummy init tensor like zeros
+        self.weight = nn.Parameter( torch.zeros(dim) ) # recall this takes a tensor -> soln: dummy init tensor like zeros
 
     def _norm(self, x):
         # Implements the RMSNorm as in the original RMS Norm Paper
@@ -166,9 +229,10 @@ class GemmaAttention(nn.Module):
 
         self.attention_dropout = config.attention_dropout
         self.rms_norm_eps = config.rms_norm_eps
-        self.max_position_encodings = config.max_position_encodings
+        self.max_position_embeddings = config.max_position_encodings
         self.rope_theta = config.rope_theta
         self.is_causal = True
+
     
         # RoPE
         self.rotary_emb = GemmaRotaryEmbedding(
@@ -229,13 +293,13 @@ class GemmaAttention(nn.Module):
         cos, sin = self.rotary_emb(value_states, position_ids, seq_len=None)
         # [Batch_Size, Num_Heads_Q, Seq_Len, Head_Dim], [Batch_Size, Num_Heads_KV, Seq_Len, Head_Dim]
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-        
+
 
         # After applying positional info on the key/value states
         # we now have key_states / value_states for all positiona uptil start_pos
         # [  ]
         if kv_cache is not None:
-            kv_cache.update( key_states, value_states, self.layer_idx )
+            key_states, value_states = kv_cache.update( key_states, value_states, self.layer_idx )
 
         # Multi-Query Attention
         # Since, the custom cuda kernel isn't available, we just make `group_size` copies
@@ -243,10 +307,11 @@ class GemmaAttention(nn.Module):
         key_states = repeat_kv(key_states, self.key_value_groups)
         value_states = repeat_kv(value_states, self.key_value_groups)
 
+
         # Perform the similarity
         # (bsz, num_heads, seq_len, hidden_size ) x (bsz, num_heads, hidden_size, seq_len) 
         # -> (bsz, num_heads, seq_len, seq_len )
-        attn_weights = torch.matmul( query_states, key_states.transpose(-2, -1) ) / torch.sqrt( self.head_dim )
+        attn_weights = torch.matmul( query_states, key_states.transpose(-2, -1) ) / math.sqrt( self.head_dim )
 
 
         # mask stuff
@@ -257,12 +322,17 @@ class GemmaAttention(nn.Module):
             # We don't mask the future tokens, they look at each other irrespeive of the positions
         # If generation phase, we mask the future tokens( during training ) => there we add -inf in attention_mask -> e**-inf = 0 after softmax
         # SInce, this is inference, we don't know the gt => usual auto-regressively does it.
+        assert attention_mask is not None, "Attention Mask needss to be provided"
         attn_weights = attn_weights + attention_mask
 
         # Apply softmax
         attn_weights = torch.nn.functional.softmax(attn_weights, dim = -1, dtype = torch.float32).to(query_states.device)
         # dropout, here in inference is 0.
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
+
+        # print(f"Shape of attn_weights: {attn_weights.shape}")
+        # print(f"Shape of value_states: {value_states.shape}")
+
 
         # calc. attention_output 
         # (bsz, num_heads, seq_len, seq_len ) x (bsz, num_heads, seq_len, head_dim) ->  (bsz, num_heads, seq_len, head_dim)
@@ -306,9 +376,9 @@ class DecoderLayer(nn.Module):
         # Only the Decoder Part
         # embs -> [ DecoderLayer ] -> [ DecoderLayer ] -> .... -> contextualised_embs
         self.layer_idx = layer_idx
-        self.input_layernorm = GemmaRMSNorm(config, eps = config.rms_norm_eps)
+        self.input_layernorm = GemmaRMSNorm(dim=config.hidden_size)
         self.self_attn = GemmaAttention(config, layer_idx)
-        self.post_attention_layernorm = GemmaRMSNorm(config, eps = config.rms_norm_eps)
+        self.post_attention_layernorm = GemmaRMSNorm(dim=config.hidden_size)
         self.mlp = GemmaMLP(config)
 
 
@@ -325,7 +395,7 @@ class DecoderLayer(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
 
         # (bsz, seq_len, hidden_size) -> # (bsz, seq_len, hidden_size)
-        hidden_states = self.self_attn( 
+        hidden_states, _ = self.self_attn( 
                                         hidden_states = hidden_states, \
                                         position_ids = position_ids, \
                                         attention_mask = attention_mask, \
@@ -369,14 +439,13 @@ class GemmaModel(nn.Module):
                                           padding_idx = self.pad_token_id )
 
         # Decoder Layer
-        self.layers = nn.Sequential( \
+        self.layers = nn.ModuleList( \
                                     [ DecoderLayer(config, layer_idx) for layer_idx in range(self.num_hidden_layers) ]
                                     )
 
         # post decoder norm layer
         self.rms_norm_eps = config.rms_norm_eps
-        self.norm = GemmaRMSNorm(dim = self.hidden_size, \
-                                 eps = self.rms_norm_eps)
+        self.norm = GemmaRMSNorm(dim = self.hidden_size)
 
     def tie_weights(self):
         return self.embed_tokens
@@ -390,7 +459,7 @@ class GemmaModel(nn.Module):
         hidden_states = input_embeds
 
         for decoder_layer in self.layers:
-            hidden_states = decoder_layer(input_embeds = hidden_states,
+            hidden_states = decoder_layer(hidden_states = hidden_states,
                                           position_ids = position_ids,
                                           attention_mask = attention_mask,
                                           kv_cache = kv_cache
@@ -416,6 +485,9 @@ class GemmaForCausalLM(nn.Module):
 
         self.text_config = config
         self.model = GemmaModel(self.text_config) # this is language_model
+
+    def get_input_embeddings(self):
+        return self.model.embed_tokens
 
     def tie_weights(self):
         # share the "weight" params NOT the buffers
@@ -450,7 +522,7 @@ class GemmaForCausalLM(nn.Module):
         # Need to solve the next predicted token
         vocab_logits = self.lm_head(outputs)
 
-        vocab_logits.float()
+        vocab_logits = vocab_logits.float()
 
         # prepare the return data
         return_data = { "logits": vocab_logits }

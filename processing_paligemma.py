@@ -2,6 +2,7 @@ from typing import Optional, List, Union
 
 from PIL import Image
 import numpy as np
+import torch
 
 
 
@@ -48,7 +49,9 @@ def process_images(images: List[Image], \
             ]
     
     # remaing can be done by np
-    images = [ np.array(image) for image in images ]
+    # images = [ np.array(image) for image in images ]
+    images = [np.array(image.convert("RGB")) for image in images]  # Convert to RGB to ensure 3 channels
+
     
     # scale down
     images = [ 
@@ -65,6 +68,8 @@ def process_images(images: List[Image], \
                 for image in images 
             ]      
 
+    # Move the channel dimension to the first dimension. The model expects images in the format [Channel, Height, Width]
+    images = [image.transpose(2, 0, 1) for image in images]
     return images
 
 
@@ -86,7 +91,7 @@ def create_gemma_string(prefix_prompt,
 
 
 
-class PaligemmaProcessor(): # no inheritance
+class PaliGemmaProcessor(): # no inheritance
 
     def __init__(self, \
                  tokenizer, 
@@ -143,8 +148,8 @@ class PaligemmaProcessor(): # no inheritance
     def __call__(self,\
                  images: List[Image],
                  text: List[str], # List of strings, 1-1 correspondence with the list of images above
-                 padding, # For each batch element to be same sz max_seq_len, [prompts can have varied sizes]
-                 truncation: bool # If prompt exceeds max_seq_len, truncate it!
+                 padding: str = "longest", # For each batch element to be same sz max_seq_len, [prompts can have varied sizes]
+                 truncation: bool = True, # If prompt exceeds max_seq_len, truncate it!
                  ): 
         '''
             - Process images
@@ -157,6 +162,10 @@ class PaligemmaProcessor(): # no inheritance
                 - Later we set the dummy_image_tokens with the output from SigLIP after processing
                     - the image_pixels
         '''
+        self.images = images
+        self.text = text
+        self.truncation = truncation
+        self.padding = padding
 
         # Aside[ Recalling my Python concepts ]: Ignore!
         # Need for call, Python101: p = Dog(), then p(...) instance can be used as a function call
@@ -172,7 +181,11 @@ class PaligemmaProcessor(): # no inheritance
 
         # create a single item for this, to create the batch_dim 
         pixel_values = np.stack(pixel_values, axis = 0) # [ [image1], [image2], [image3], [image4].. ] 
-        
+        # convert to torch
+        pixel_values = torch.tensor(pixel_values)
+
+        print(f"shape of pixel_values: {pixel_values.shape}")
+
         # ("<image>" * seq_len) + "{bos_token}" + prefix_prompts i.e text/prompts
         # Later SigLIP(pixel_values) -> (B, num_patches, embed_dim) -> Projector  
         #   Projector -> aligns it with the gemma_string_tokenized for campatible shape
@@ -200,15 +213,15 @@ class PaligemmaProcessor(): # no inheritance
 
 
 
-if __name__ == '__main__':
+# if __name__ == '__main__':
 
-    image = np.random.randint(0, 256, (256, 256, 3), dtype=np.uint8)
+#     image = np.random.randint(0, 256, (256, 256, 3), dtype=np.uint8)
 
-    # Convert the numpy array to a PIL Image
-    image = Image.fromarray(image)
-    pixel_values = process_images( [image], 
-                                  image_size=224, 
-                                  scale_factor=1/255.0,
-                                  resampling=Image.Resampling.BICUBIC) # list of np.ndarray
-    print(pixel_values[0].shape) # (224, 224, 3)
-    print( np.max(pixel_values[0]), np.min(pixel_values[0]) ) # 1.0 -1.0
+#     # Convert the numpy array to a PIL Image
+#     image = Image.fromarray(image)
+#     pixel_values = process_images( [image], 
+#                                   image_size=224, 
+#                                   scale_factor=1/255.0,
+#                                   resampling=Image.Resampling.BICUBIC) # list of np.ndarray
+#     print(pixel_values[0].shape) # (224, 224, 3)
+#     print( np.max(pixel_values[0]), np.min(pixel_values[0]) ) # 1.0 -1.0
